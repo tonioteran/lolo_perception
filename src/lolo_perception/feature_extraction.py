@@ -438,9 +438,33 @@ def contourPositionY(cnt):
 
     return maxY
 
-def weightedCentroid(gray):
+def weightedCentroid(patch):
     # https://stackoverflow.com/questions/53719588/calculate-a-centroid-with-opencv
-    pass
+    M = cv.moments(patch)
+    if M["m00"] == 0:
+        return None
+    cx = int(round(M["m10"] / M["m00"]))
+    cy = int(round(M["m01"] / M["m00"]))
+    return cx, cy
+
+def refineCentroidGradient(gray, contours, ksize=3):
+    g = GradientFeatureExtractor(None, None, ksize)
+    gradImg = g(gray)
+    gradImg = cv.GaussianBlur(gradImg, (ksize,ksize), 0)
+
+    centroids = []
+
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    cv.drawContours(mask, contours, -1, (255), 1)
+    gradMasked = cv.bitwise_and(gradImg, gradImg, mask=mask)
+    for cnt in contours:
+        x, y, w, h = cv.boundingRect(cnt)
+        patch = gradMasked[y:y+h, x:x+w]
+        centroid = weightedCentroid(patch)
+        centroid = centroid[0]+x, centroid[1]+y
+        centroids.append(centroid)
+
+    return centroids
 
 def RCF((x,y), r, gray):
     I = float(gray[y, x])
@@ -604,6 +628,36 @@ def localMax(gray, kernel):
     localMaxImg = cv.bitwise_and(gray, gray, mask=eqMask)
     return localMaxImg
 
+def localMaxSupressed2(gray, kernel, p):
+    seed = gray*p
+    seed = seed.astype(np.uint8)
+    dilated = cv.dilate(seed, kernel, borderValue=0, iterations=1)
+    eqMask = cv.compare(gray, dilated, cv.CMP_GE)
+    localMaxImg = cv.bitwise_and(gray, gray, mask=eqMask)
+    return localMaxImg
+
+def localMaxSupressed(gray, kernel, p):
+    gray = gray*p
+    gray = gray.astype(np.uint8)
+    dilated = cv.dilate(gray, kernel, borderValue=0, iterations=1)
+    eqMask = cv.compare(gray, dilated, cv.CMP_GE)
+    localMaxImg = cv.bitwise_and(gray, gray, mask=eqMask)
+    return localMaxImg
+
+def localMaxChange(gray, kernel, p):
+    dilated = cv.dilate(gray, kernel, borderValue=255, iterations=1)
+    eroded = cv.erode(gray, kernel, borderValue=255, iterations=1)
+    if p < 1:
+        # Percentage threshold
+        dilatedSupressed = dilated.astype(np.float32)*p
+    else:
+        # Fixed threshold
+        dilatedSupressed = dilated-p
+    dilatedSupressed = dilatedSupressed.astype(np.uint8)
+    eqMask = cv.compare(dilatedSupressed, eroded, cv.CMP_GE)
+    localMaxImg = cv.bitwise_and(gray, gray, mask=eqMask)
+    return localMaxImg
+
 def localMin(gray, kernel):
     dilated = cv.erode(gray, kernel, borderValue=0, iterations=1)
     eqMask = cv.compare(gray, dilated, cv.CMP_EQ)
@@ -677,17 +731,6 @@ def findPeakContourAt(gray, center, offset=None, mode=cv.RETR_EXTERNAL):
     else:
         return None
 
-    """
-    cv.drawContours(img, [foundCnt], 0, (255, 0, 0), -1)
-    if cv.contourArea(foundCnt) < 10:
-        ratioThresh = 0.2
-    else:
-        ratioThresh = 0.5
-    color = (255, 0, 0)
-    if contourRatio(foundCnt) < ratioThresh:
-        color = (0, 0, 255)
-    drawInfo(img, (cx+20, cy-20), str(contourRatio(foundCnt)), color=color)
-    """
     return foundCnt, foundCntOffset
 
 def findMaxPeakAt(gray, center, p):
@@ -771,6 +814,11 @@ def findMaxPeaks(gray, p, drawImg=None):
 
     return peakCenters, peakContours
 
+def pDecay(b, pMin, pMax, I, IMax=255.):
+    assert 1-(pMax-pMin)/b > 0, "Invalid value of b, (b >={})".format(pMax-pMin)
+    c = -1./255*np.log(1-(pMax-pMin)/b)
+    return pMin + b*(1-np.exp(-c*I))
+
 
 def findNPeaks2(gray, kernel, pMin, pMax, n, minThresh=0, margin=1, ignorePAtMax=True, offset=(0,0), maxIter=10000000, drawImg=None, drawInvalidPeaks=False):
     peaksDilation = localMax(gray, kernel) # local max
@@ -779,13 +827,12 @@ def findNPeaks2(gray, kernel, pMin, pMax, n, minThresh=0, margin=1, ignorePAtMax
     grayMasked = gray.copy()
     peaksDilationMasked = peaksDilation.copy()
     maxIntensity = np.inf
-    #_, grayThreholded = cv.threshold(gray, maxIntensity-1, 256, cv.THRESH_TOZERO) # possibly faster thresholding first
     peakCenters = []
     peakContours = []
 
     iterations = 0
     while True:
-        if np.max(peaksDilationMasked) != maxIntensity: 
+        if np.max(peaksDilationMasked) != maxIntensity:
             if len(peakCenters) >= n:
                 print("Found {} peaks, breaking".format(n))
                 break
@@ -798,7 +845,8 @@ def findNPeaks2(gray, kernel, pMin, pMax, n, minThresh=0, margin=1, ignorePAtMax
                     threshold = 254
                     #threshold = 251 # TODO: maybe another value is more suitable?
                 else:
-                    pTemp = maxIntensity/255.*(pMax-pMin) + pMin
+                    #pTemp = maxIntensity/255.*(pMax-pMin) + pMin
+                    pTemp = pDecay(.175, pMin, pMax, I=maxIntensity)
                     threshold = int(pTemp*maxIntensity - 1)
 
                 ret, threshImg = cv.threshold(grayMasked, threshold, 256, cv.THRESH_BINARY)
@@ -813,6 +861,10 @@ def findNPeaks2(gray, kernel, pMin, pMax, n, minThresh=0, margin=1, ignorePAtMax
         if cntPeak is None:
             print("Something went wrong?!")
             break
+
+        # TODO: Check if contour includes the threshold value.
+        # If it doesn't, we can probably break here (noise).
+        # TODO: Check convexity. Non-convex shapes are probably not light sources
 
         # Check if contour is on edge
         cnts = [cntPeak]
@@ -1492,7 +1544,7 @@ class LightSource:
         return contourRatio(self.cnt)
 
 class LightSourceTracker:
-    def __init__(self, center, intensity, radius, maxPatchRadius, minPatchRadius, p=.97):
+    def __init__(self, center, intensity, radius, maxPatchRadius, minPatchRadius, p=.975):
         self.intensity = intensity
         self.minIntensity = 20
         self.center = center
@@ -1507,12 +1559,15 @@ class LightSourceTracker:
 
         self.cnt = None
 
+        self.ksize = 11
+        self.locMaxKernel = circularKernel(self.ksize)
+
     def _limitCenter(self, gray, center, radius):
         x = max(min(center[0], gray.shape[1]-radius-1), radius)
         y = max(min(center[1], gray.shape[0]-radius-1), radius)
         return (x, y)
 
-    def _peakSelect(self, gray, peakImgPatch, center, patchRadius, drawImg=None):
+    def __peakSelect(self, gray, peakImgPatch, center, patchRadius, drawImg=None):
         peakImgPatch = peakImgPatch.copy()
         peakContours = []
         peakIntensities = []
@@ -1586,21 +1641,36 @@ class LightSourceTracker:
         #    if self.radius *< rad
         return thePeakInt, thePeakCnt
 
-    def __peakSelect(self, gray, peakImgPatch, center, patchRadius, drawImg=None):
+    def _peakSelect(self, gray, peakImgPatch, center, patchRadius, drawImg=None):
         # TODO
-        """
+        peakImgPatch = cv.GaussianBlur(peakImgPatch, (self.ksize,self.ksize), 0)
         (peakDilationImg, 
         peaksDilationMasked, 
         peakCenters, 
-        peakContours) = findNPeaks(gray, 
-                                kernel=self.kernel, 
-                                p=self.p, 
-                                n=1,
-                                margin=0,
-                                offset=(center[0]-patchRadius, center[1]-patchRadius),
-                                drawImg=drawImg)
-        """
-        pass
+        peakContours,
+        iterations) = findNPeaks2(peakImgPatch, 
+                                  kernel=self.locMaxKernel, 
+                                  pMin=self.p,
+                                  pMax=self.p, 
+                                  n=5,
+                                  minThresh=self.intensity*0.7,
+                                  # maybe this should be (self.kernelSize-1)/2 instead of peakMargin?
+                                  # or maybe it will remove the true candidates in case of weird shapes from "non-peaks"?
+                                  margin=0,
+                                  ignorePAtMax=True,
+                                  offset=(center[0]-patchRadius, center[1]-patchRadius),
+                                  maxIter=5,
+                                  drawImg=drawImg,
+                                  drawInvalidPeaks=True)
+
+        if len(peakCenters) > 0:
+            peak = peakCenters[0]
+            thePeakCnt = peakContours[0]
+            thePeakInt = gray[peak[1], peak[0]]
+        else:
+            return None
+        
+        return thePeakInt, thePeakCnt
 
     def getLightSource(self):
         return LightSource(self.cnt, self.intensity)
@@ -1622,16 +1692,10 @@ class LightSourceTracker:
             print("not right")
             return False
 
-        #grayMasked = np.zeros(gray.shape, dtype=np.uint8)
-        #grayMasked[center[1]-patchRadius:center[1]+patchRadius+1, center[0]-patchRadius:center[0]+patchRadius+1] = patch
-        #morphSize = int(self.radius/2)
-        #morphSize += 1 if morphSize % 2 == 0 else 0
-        #if morphSize > 1:
-            #morphKernel = circularKernel(morphSize)
-            #patch = cv.morphologyEx(patch, cv.MORPH_OPEN, morphKernel, iterations=1)#cv.erode(patch, erodeKernel)
-
-        patch = cv.bitwise_and(patch, patch, mask=patchKernel)
+        # TODO: Masking the path with a circular kernel, edges might be accepted by findPeaks 
+        #patch = cv.bitwise_and(patch, patch, mask=patchKernel)
         #cv.imshow("patch", patch)
+        #cv.waitKey(1)
 
         ret = self._peakSelect(gray, patch, center, patchRadius, drawImg=drawImg)
 
@@ -1651,8 +1715,9 @@ class LightSourceTracker:
         self.center = newCenter
         self.intensity = max(peakIntensity, self.minIntensity)
         self.radius = newRadius
-        self.patchRadius = int(round(self.patchScale*self.radius))
-        self.patchRadius = min(self.maxPatchRadius, max(self.minPatchRadius, self.patchRadius))
+        #self.patchRadius = int(round(self.patchScale*self.radius))
+        #self.patchRadius = min(self.maxPatchRadius, max(self.minPatchRadius, self.patchRadius))
+        self.patchRadius = self.radius + self.minPatchRadius
         self.center = self._limitCenter(gray, self.center, self.patchRadius)
         self.cnt = peakCnt
 
@@ -1806,7 +1871,7 @@ class LightSourceTracker2:
         return True
 
 class LightSourceTrackInitializer:
-    def __init__(self, radius=10, maxPatchRadius=50, minPatchRadius=7, p=0.97, maxIntensityChange=0.7, maxMovement=20):
+    def __init__(self, radius=10, maxPatchRadius=50, minPatchRadius=7, p=0.975, maxIntensityChange=0.7, maxMovement=20):
         self.radius = radius
         self.maxPatchRadius = maxPatchRadius
         self.minPatchRadius = minPatchRadius
@@ -2304,6 +2369,8 @@ class ModifiedHATS:
         self.ignorePeakAtMax = ignorePeakAtMax
         self.showHistogram = showHistogram
 
+        self.morphKernel = circularKernel(blurKernelSize)
+
         self.img = np.zeros((10, 10)) # store the last processed image
         self.iterations = 0
 
@@ -2357,6 +2424,9 @@ class ModifiedHATS:
         grayROI = gray.copy()
         img = gray.copy()
         img = cv.GaussianBlur(img, (self.blurKernelSize,self.blurKernelSize), self.sigma)
+
+        # TODO: seems reasonable to have
+        img = cv.morphologyEx(img, cv.MORPH_OPEN, self.morphKernel, iterations=1)
 
         #localMaxImg = localMax(img) # only use peaks defined by local maximas
         hist = cv.calcHist([img], [0], None, [256], [0,256])
@@ -2420,8 +2490,10 @@ class ModifiedHATS:
         self.iterations = i
         self.img = imgTemp
 
+        #candidates = [cv.approxPolyDP(cnt, 0.01*cv.arcLength(cnt, True), True) for cnt in candidates]
         candidates = [LightSource(cnt+offset, self.threshold) for cnt in candidates]
         candidates = self._sortLightSources(candidates, maxAdditionalCandidates)
+
 
         if drawImg is not None:
             for ls in candidates:
@@ -2440,7 +2512,7 @@ class ModifiedHATS:
         ########### plot peaks ##############
         if self.showHistogram:
             plt.cla()
-            N = 50
+            N = 150
             grayROI = cv.GaussianBlur(grayROI, (self.blurKernelSize,self.blurKernelSize), self.sigma)
             grayFull = cv.GaussianBlur(grayFull, (self.blurKernelSize,self.blurKernelSize), self.sigma)
             plotHistogram(grayFull, N=N, highlightPeak=self.threshold, facecolor="b")
@@ -2519,10 +2591,13 @@ class AdaptiveThresholdPeak:
         # blurring seems to help for large resolution 
         # test_sessions/171121_straight_test.MP4
         if self.blurKernelSize > 0:
-            gray = cv.GaussianBlur(gray, (self.blurKernelSize,self.blurKernelSize), 0) 
+            gray = cv.GaussianBlur(gray, (self.blurKernelSize,self.blurKernelSize), 0)
+            
+        # TODO: works pretty good in ROI
+        #ret, otsu = cv.threshold(gray, 0, 255, cv.THRESH_BINARY+cv.THRESH_OTSU)
+        #minIntensity = max(ret, minIntensity)
 
         #peakMargin = 0 # TODO: should work with 0 but needs proper testing
-        
         (peakDilationImg, 
         peaksDilationMasked, 
         peakCenters, 
@@ -2566,7 +2641,6 @@ class AdaptiveThresholdPeak:
 
         # TODO: check if offset is correct
         candidates = [LightSource(cnt, gray[pc[1]-offset[1], pc[0]-offset[0]]) for pc, cnt in zip(peakCenters, peakContours)]
-        
 
         # TODO: This should probably be done
         candidatesNew = []

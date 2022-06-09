@@ -4,7 +4,7 @@ import numpy as np
 import itertools
 from scipy.spatial.transform import Rotation as R
 
-from lolo_perception.feature_extraction import featureAssociation, featureAssociationSquare, featureAssociationSquareImproved, localMax, LightSourceTrackInitializer, AdaptiveThreshold2, AdaptiveThresholdPeak, ModifiedHATS, LocalMaxHATS
+from lolo_perception.feature_extraction import featureAssociation, featureAssociationSquare, featureAssociationSquareImproved, localMax, refineCentroidGradient, LightSourceTrackInitializer, AdaptiveThreshold2, AdaptiveThresholdPeak, ModifiedHATS, LocalMaxHATS
 from lolo_perception.pose_estimation import DSPoseEstimator, calcMahalanobisDist
 from lolo_perception.perception_utils import plotPoseImageInfo, regionOfInterest
 
@@ -33,56 +33,15 @@ class Perception:
 
         self.associationFunc = assFunc
 
-        # This scaling might not be accurate, better to adjust manually
-        #minPatchRadius = int(self.camera.cameraMatrix[0, 0]*self.camera.resolution[1]/69120.0)
-        #radius = int(minPatchRadius * 1.2)
-        #maxPatchRadius = int(minPatchRadius * 7.2)
-        #maxMovement = int(minPatchRadius * 1.5)
-
-        minPatchRadius = 7
-        radius = 10
-        maxPatchRadius = 100
-        maxMovement = 20
-
-
-        # Initialize light source trackers
-        self.lightSourceTracker = LightSourceTrackInitializer(radius=radius, 
-                                                              maxPatchRadius=maxPatchRadius, 
-                                                              minPatchRadius=minPatchRadius,
-                                                              p=0.97,
-                                                              maxIntensityChange=0.7,
-                                                              maxMovement=maxMovement)
-        # Number of trackers in the initialization phase (stage 1 and 2)
-        self.nLightSourceTrackers = 20
-
-        # Use HATS when light sources are "large"
-        # This feature extractor sorts candidates based on area
-        
-        """
-        self.localMaxHATS = LocalMaxHATS(len(self.featureModel.features), 
-                                         kernelSize=11, 
-                                         p=None, 
-                                         maxIntensityChange=0.7,
-                                         showHistogram=False)
-        """
-        
-        #self.log = 
-        """
-        self.hatsFeatureExtractor = AdaptiveThreshold2(len(self.featureModel.features), 
-                                                       marginPercentage=0.01,
-                                                       minArea=10,
-                                                       minRatio=0.2,
-                                                       thresholdType=cv.THRESH_BINARY)
-        """
         res1080p = True
         if res1080p:
             minArea = 40
-            blurKernelSize = 11
-            localMaxKernelSize = 25
+            blurKernelSize = 11 # 11
+            localMaxKernelSize = 11 # 25
         else:
             minArea = 20
             blurKernelSize = 5
-            localMaxKernelSize = 11
+            localMaxKernelSize = 5 # 11
 
         minCircleExtent = 0.1 # 0.2
         maxIntensityChange = 0.7
@@ -100,17 +59,19 @@ class Perception:
 
         # Use local peak finding to initialize and when light sources are small
         # This feature extractor sorts candidates based on intensity and then area
-        p = .975
+        pMin = .8
+        pMax = .975
+        maxIter = 100
         self.peakFeatureExtractor = AdaptiveThresholdPeak(len(self.featureModel.features), 
                                                           kernelSize=localMaxKernelSize, # 11 for 720p, 25 for 1080p
-                                                          pMin=p, #0.93 set pMin = pMax for fixed p
-                                                          pMax=p, # 0.975
+                                                          pMin=pMin, #0.93 set pMin = pMax for fixed p
+                                                          pMax=pMax, # 0.975
                                                           maxIntensityChange=maxIntensityChange,
                                                           minArea=minArea,
                                                           minCircleExtent=minCircleExtent,
                                                           blurKernelSize=blurKernelSize,  # 5 for 720p, 11 for 1080p
                                                           ignorePAtMax=True,
-                                                          maxIter=30)
+                                                          maxIter=maxIter)
         
         # start with peak
         self.featureExtractor = self.peakFeatureExtractor
@@ -122,7 +83,27 @@ class Perception:
         self.maxAdditionalCandidates = 6 # 6
 
         # margin of the region of interest when pose has been aquired
-        self.roiMargin = int(round(0.0626*self.camera.cameraMatrix[0, 0])) # Adapted so that fx = 1400 -> roiMargin = 87.64
+        self.roiMargin = int(round(0.0626*self.camera.cameraMatrix[0, 0]))
+
+        # This scaling might not be accurate, better to adjust manually
+        #minPatchRadius = int(self.camera.cameraMatrix[0, 0]*self.camera.resolution[1]/69120.0)
+        #radius = int(minPatchRadius * 1.2)
+        #maxPatchRadius = int(minPatchRadius * 7.2)
+        #maxMovement = int(minPatchRadius * 1.5)
+        minPatchRadius = self.roiMargin
+        radius = 20
+        maxPatchRadius = 100
+        maxMovement = 20
+
+        # Initialize light source trackers
+        self.lightSourceTracker = LightSourceTrackInitializer(radius=radius, 
+                                                              maxPatchRadius=maxPatchRadius, 
+                                                              minPatchRadius=minPatchRadius,
+                                                              p=0.975,
+                                                              maxIntensityChange=0.7,
+                                                              maxMovement=maxMovement)
+        # Number of trackers in the initialization phase (stage 1 and 2)
+        self.nLightSourceTrackers = 20
 
         # Pose estimator that calculates poses from detected light sources
         initPoseEstimationFlag = cv.SOLVEPNP_ITERATIVE # cv.SOLVEPNP_ITERATIVE or cv.SOLVEPNP_EPNP 
@@ -132,7 +113,8 @@ class Perception:
                                              ignoreRoll=False, 
                                              ignorePitch=False,
                                              initFlag=initPoseEstimationFlag, 
-                                             flag=poseEstimationFlag)
+                                             flag=poseEstimationFlag,
+                                             refine=False)
 
         # valid orientation range [yawMinMax, pitchMinMax, rollMinMax]. Currently not used to disregard
         # invalid poses, but the axis and region of interest will be shown in red when a pose has 
@@ -155,7 +137,7 @@ class Perception:
         # 5 - track pose
         self.startStage = 4 # 1 or 4
         self.stage = self.startStage
-        self.stage2Iterations = 15 # Tracking light sources for this amount of frames
+        self.stage2Iterations = 15#15 # Tracking light sources for this amount of frames
         self.stage4Iterations = 10 # Acquiring pose for this amount of frames
 
         # Access images from perception_node
@@ -319,6 +301,7 @@ class Perception:
 
             if len(candidates) >= len(self.featureModel.features):
 
+
                 # N_C! / (N_F! * (N_C-N_F)!)
                 lightCandidateCombinations = list(itertools.combinations(candidates, len(self.featureModel.features)))
                      
@@ -330,8 +313,8 @@ class Perception:
                 elif self.featureExtractor == self.peakFeatureExtractor:
                     # sort by summed intensity
                     # TODO: not sure how much this improves
-                    lightCandidateCombinations.sort(key=lambda comb: (sum([ls.intensity for ls in comb]), sum([ls.area for ls in comb])), reverse=True)
-                    #lightCandidateCombinations.sort(key=lambda comb: sum([ls.intensity for ls in comb]), reverse=True)
+                    #lightCandidateCombinations.sort(key=lambda comb: (sum([ls.intensity for ls in comb]), sum([ls.area for ls in comb])), reverse=True)
+                    lightCandidateCombinations.sort(key=lambda comb: (sum([ls.intensity for ls in comb]), sum([ls.circleExtent() for ls in comb])), reverse=True)
                 else:
                     # using some other 
                     print("sorting by intensity, then area")
@@ -371,6 +354,12 @@ class Perception:
                         dsPose.calcCovariance()
                     poseAquired = True
 
+                    # TODO: Use refined centers?
+                    #centroids = refineCentroidGradient(gray, [ls.cnt for ls in dsPose.associatedLightSources], ksize=7)
+                    #for ls, centroid in zip(candidates, centroids):
+                    #    #ls.center = (ls.center[0] + centroid[0])/2, (ls.center[1] + centroid[1])/2 
+                    #    cv.circle(poseImg, centroid, 1, (255,0,255), 1)
+
                 else:
                     print("Pose estimation failed")
 
@@ -394,6 +383,8 @@ class Perception:
             poseEstMethod = "L-M"
         elif poseEstFlag == cv.SOLVEPNP_EPNP:
             poseEstMethod = "EPnP"
+            if self.poseEstimator.refine:
+                poseEstMethod += "+L-M"
         else:
             poseEstMethod = poseEstFlag
             
