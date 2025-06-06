@@ -2,19 +2,29 @@
   <arg name="video_device" default="false" /> <!--Use video device online-->
   <arg name="perspective" default="false" /> <!--None, camera or dockingstation-->
   <arg name="publish_path" default="false" /> <!--if true, perspective has to be given-->
-  <arg name="sim" default="false" /> <!-- When running simulation, some topic needs to be remapped-->
+  <arg name="sim" default="true" /> <!-- When running simulation, some topic needs to be remapped-->
   <arg name="hz" default="30"/>
   <arg name="pose_feedback" default="true"/>
   <arg name="cv_show" default="false"/>
   <arg name="rviz" default="false"/>
 
+  <!--Camera image and info parameters.-->
+  <arg name="image_compressed_topic" default="camera/image_throttle"/>
+  <!--<arg name="image_topic" default="lolo/sensors/image"/>-->
+  <arg name="image_topic" default="lolo/sensors/camera/image_mono"/>
+  <arg name="camera_info_yaml" default="lolo_camera_240611.yaml"/>
+  <arg name="camera_info_topic" default="lolo/sensors/camera_info"/>
+  <arg name="camera_frame_id" default="lolo/camera_link"/>
+
+  <arg name="output_image_topic" default="lolo/perception/debug/image_pose_overlay"/>
+
   <!--Some parameters for the perception node-->
-  <arg name="feature_model_yaml" default="big_prototype_5.yaml" />
-  <arg name="hats_mode" default="valley" /> <!--peak, valley or simple-->
+  <arg name="feature_model_yaml" default="asko_240611.yaml" />
+  <arg name="hats_mode" default="peak" /> <!--peak, valley or simple-->
 
   <include file="$(find lolo_perception)/launch/usb_cam.launch" if="$(eval arg('video_device') != false)">
     <arg name="video_device" value="$(arg video_device)"/>
-  </include> 
+  </include>
 
   <node name="perception_node" pkg="lolo_perception" type="perception_node.py" output="screen" >
     <param name="feature_model_yaml" value="$(arg feature_model_yaml)"/>
@@ -24,19 +34,29 @@
     <param name="hats_mode" value="$(arg hats_mode)"/>
     <param name="pose_feedback" value="$(arg pose_feedback)"/>
 
-    <remap from="/lolo_camera/image_rect_color" to="/lolo/sim/camera_aft/image_color" if="$(eval arg('sim') == true)"/>
-    <remap from="/lolo_camera/camera_info" to="/lolo/sim/camera_aft/camera_info" if="$(eval arg('sim') == true)"/>
+    <remap from="/lolo_camera/image_rect_color" to="$(arg image_topic)" if="$(eval arg('sim') == true)"/>
+    <remap from="/lolo_camera/camera_info" to="$(arg camera_info_topic)" if="$(eval arg('sim') == true)"/>
   </node>
 
-  <node pkg="lolo_perception" type="path_publisher_node.py" name="path_publisher_node" if="$(eval arg('publish_path') == true)"> 
-    <remap from="/pose_topic" to="/docking_station/feature_model/estimated_pose" if="$(eval arg('perspective') == 'camera')"/>
-    <remap from="/pose_topic" to="/lolo_camera/estimated_pose" if="$(eval arg('perspective') == 'dockingstation')"/>
+  <node pkg="lolo_perception" type="path_publisher_node.py" name="path_publisher_node" if="$(eval arg('publish_path') == true)">
+    <remap from="/pose_topic" to="/lolo/perception/optical_pose" if="$(eval arg('perspective') == 'camera')"/>
+    <remap from="/pose_topic" to="/service_boat/perception/estimated_pose" if="$(eval arg('perspective') == 'dockingstation')"/>
   </node>
- 
-  <node pkg="tf" type="static_transform_publisher" name="docking_station_link" args="0 0 1 1.571 0 -1.571 map docking_station_link 100" if="$(eval arg('perspective') == 'dockingstation')"/>
-  <node pkg="tf" type="static_transform_publisher" name="lolo_camera_link" args="0 0 1 -1.571 0 -1.571 map lolo_camera_link 100" if="$(eval arg('perspective') == 'camera')"/>
+
+  <node pkg="lolo_perception" type="camera_info_publisher.py" name="camera_info_pub">
+    <param name="camera_info_yaml" value="$(find lolo_perception)/camera_calibration_data/$(arg camera_info_yaml)"/>
+    <param name="camera_frame_id" value="$(arg camera_frame_id)"/>
+    <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+  </node>
+
+  <node pkg="image_transport" type="republish" name="output_image_compress"
+        args="raw in:=$(arg output_image_topic) compressed out:=$(arg output_image_topic)"/>
+
+  <!--<node pkg="tf" type="static_transform_publisher" name="docking_station_link" args="0 0 1 1.571 0 -1.571 map docking_station_link 100" if="$(eval arg('perspective') == 'dockingstation')"/>-->
+  <!--<node pkg="tf" type="static_transform_publisher" name="lolo_camera_link" args="0 0 1 -1.571 0 -1.571 map lolo_camera_link 100" if="$(eval arg('perspective') == 'camera')"/>-->
+  <!--node pkg="tf" type="static_transform_publisher" name="lolo_camera_link" args="-2.5 0.0 0.33 1.571 0 -1.571 lolo/base_link lolo_camera_link 100" if="$(eval arg('solo') == true)"/-->
   <!--node pkg="tf" type="static_transform_publisher" name="lolo_camera_link" args="-2.5 0.0 0.33 1.571 0 -1.571 lolo/base_link lolo_camera_link 100" if="$(eval arg('solo') == true)"/-->
 
-  <node type="rviz" name="rviz" pkg="rviz" args="-d $(find lolo_perception)/rviz/lolo.rviz" if="$(arg rviz)"/>
+  <!--<node type="rviz" name="rviz" pkg="rviz" args="-d $(find lolo_perception)/rviz/lolo.rviz" if="$(arg rviz)"/>-->
 
 </launch>
