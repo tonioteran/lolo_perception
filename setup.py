@@ -1,9 +1,26 @@
-from distutils.core import setup
-from catkin_pkg.python_setup import generate_distutils_setup
+from setuptools import find_packages, setup
 
-# fetch values from package.xml
-setup_args = generate_distutils_setup(
-    packages=['lolo_perception'],
-    package_dir={'': 'src'})
+package_name = 'lolo_perception'
 
-setup(**setup_args)
+setup(
+    name=package_name,
+    version='0.0.0',
+    packages=find_packages(exclude=['test']),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='tom',
+    maintainer_email='toniioteran@gmail.com',
+    description='TODO: Package description',
+    license='Apache-2.0',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'my_node = my_package.my_node:main'
+        ],
+    },
+)
