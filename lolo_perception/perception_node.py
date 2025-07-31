@@ -36,7 +36,7 @@ class PerceptionNode(Node):
         self.start_rate = self.create_rate(1.0)
         while rclpy.ok() and self.camera is None:
             print("Waiting for camera info to be published")
-            self.start_rate.sleep(1)
+            self.start_rate.sleep()
 
         self.hz = hz
         self.rate = self.create_rate(self.hz)

@@ -41,7 +41,7 @@ class FeatureModel:
         self.name = name
         
         self.features = features
-        rotMat = R.from_euler("XYZ", euler).as_dcm()
+        rotMat = R.from_euler("XYZ", euler).as_matrix()
         self.features = np.matmul(rotMat, self.features[:, :3].transpose()).transpose()
         self.features = self.features[:, :3].copy() # Don't need homogenious
 
