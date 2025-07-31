@@ -4,9 +4,9 @@ import numpy as np
 import itertools
 from scipy.spatial.transform import Rotation as R
 
-from lolo_perception.feature_extraction import featureAssociation, featureAssociationSquare, featureAssociationSquareImproved, localMax, refineCentroidGradient, LightSourceTrackInitializer, AdaptiveThreshold2, AdaptiveThresholdPeak, ModifiedHATS, LocalMaxHATS
-from lolo_perception.pose_estimation import DSPoseEstimator, calcMahalanobisDist
-from lolo_perception.perception_utils import plotPoseImageInfo, regionOfInterest
+from feature_extraction import featureAssociation, featureAssociationSquare, featureAssociationSquareImproved, localMax, refineCentroidGradient, LightSourceTrackInitializer, AdaptiveThreshold2, AdaptiveThresholdPeak, ModifiedHATS, LocalMaxHATS
+from pose_estimation import DSPoseEstimator, calcMahalanobisDist
+from perception_utils import plotPoseImageInfo, regionOfInterest
 
 class AssociateCombinationGenerator:
     def __init__(self, lsCombs, associateFunc):

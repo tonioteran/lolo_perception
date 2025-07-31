@@ -1,9 +1,12 @@
 #!/usr/bin/env python
+import rclpy
+from rclpy.node import Node
+
+import os
+import argparse
+
 import cv2 as cv
 from cv_bridge import CvBridge, CvBridgeError
-#import roslib
-import rospy
-import tf.msg
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray
 from nav_msgs.msg import Path
@@ -13,52 +16,71 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 
-from lolo_perception.feature_extraction import featureAssociation, AdaptiveThreshold2, AdaptiveThresholdPeak
-from lolo_perception.pose_estimation import DSPoseEstimator
-from lolo_perception.perception_utils import plotPoseImageInfo
-from lolo_perception.perception_ros_utils import vectorToPose, vectorToTransform, poseToVector, lightSourcesToMsg, featurePointsToMsg
-from lolo_perception.perception import Perception
+from camera_model import Camera
+from feature_model import FeatureModel
+from feature_extraction import featureAssociation, AdaptiveThreshold2, AdaptiveThresholdPeak
+from pose_estimation import DSPoseEstimator
+from perception_utils import plotPoseImageInfo
+from perception_ros_utils import vectorToPose, vectorToTransform, poseToVector, lightSourcesToMsg, featurePointsToMsg
+from perception import Perception
 
-class PerceptionNode:
+
+class PerceptionNode(Node):
     def __init__(self, featureModel, hz, cvShow=False, hatsMode="valley"):
+        super().__init__('perception_node')
+
         self.cameraTopic = "lolo_camera"
-        self.cameraInfoSub = rospy.Subscriber("lolo_camera/camera_info", CameraInfo, self._getCameraCallback)
+        self.cameraInfoSub = self.create_subscription(
+                CameraInfo, "lolo_camera/camera_info", self._getCameraCallback, 1)
         self.camera = None
-        while not rospy.is_shutdown() and self.camera is None:
+        self.start_rate = self.create_rate(1.0)
+        while rclpy.ok() and self.camera is None:
             print("Waiting for camera info to be published")
-            rospy.sleep(1)
+            self.start_rate.sleep(1)
 
         self.hz = hz
+        self.rate = self.create_rate(self.hz)
         self.cvShow = cvShow
 
         self.perception = Perception(self.camera, featureModel, hatsMode=hatsMode)
 
         self.imageMsg = None
         self.bridge = CvBridge()
-        self.imgSubsciber = rospy.Subscriber('lolo_camera/image_rect_color', Image, self._imgCallback)
+        self.imgSubsciber = self.create_subscription(
+                Image, 'lolo_camera/image_rect_color', self._imgCallback, 1)
 
-        # publish some images for visualization
-        self.imgProcPublisher = rospy.Publisher('lolo/perception/debug/image_masked', Image, queue_size=1)
-        self.imgProcDrawPublisher = rospy.Publisher('lolo/preception/debug/image_peaks', Image, queue_size=1)
-        self.imgPosePublisher = rospy.Publisher('lolo/perception/debug/image_pose_overlay', Image, queue_size=1)
+        # Publish some images for visualization.
+        self.imgProcPublisher = self.create_publisher(
+                Image, 'lolo/perception/debug/image_masked', 1)
+        self.imgProcDrawPublisher = self.create_publisher(
+                Image, 'lolo/preception/debug/image_peaks', 1)
+        self.imgPosePublisher = self.create_publisher(
+                Image, 'lolo/perception/debug/image_pose_overlay', 1)
 
-        # publish associated light source image points as a PoseArray
-        self.associatedImagePointsPublisher = rospy.Publisher('lolo_camera/associated_image_points', PoseArray, queue_size=1)
+        # Publish associated light source image points as a PoseArray.
+        self.associatedImagePointsPublisher = self.create_publisher(
+                PoseArray, 'lolo_camera/associated_image_points', 1)
 
-        # publish estimated pose
-        self.posePublisher = rospy.Publisher('lolo/perception/optical_pose', PoseWithCovarianceStamped, queue_size=1)
-        self.camPosePublisher = rospy.Publisher('lolo_camera/estimated_pose', PoseWithCovarianceStamped, queue_size=10)
-        self.mahalanobisDistPub = rospy.Publisher('lolo/perception/optical_pose/uncertainty', Float32, queue_size=1)
+        # Publish estimated pose.
+        self.posePublisher = self.create_publisher(
+                PoseWithCovarianceStamped, 'lolo/perception/optical_pose', 1)
+        self.camPosePublisher = self.create_publisher(
+                PoseWithCovarianceStamped, 'lolo_camera/estimated_pose', 10)
+        self.mahalanobisDistPub = self.create_publisher(
+                Float32, 'lolo/perception/optical_pose/uncertainty', 1)
 
-        # publish transform of estimated pose
-        self.transformPublisher = rospy.Publisher("/tf", tf.msg.tfMessage, queue_size=1)
+        # Publish transform of estimated pose.
+        self.transformPublisher = self.create_publisher(
+                tf.msg.tfMessage, "/tf", 1)
 
-        # publish placement of the light sources as a PoseArray (published in the docking_station frame)
-        self.featurePosesPublisher = rospy.Publisher('lolo/perception/optical_poses', PoseArray, queue_size=1)
+        # Publish placement of the light sources as a PoseArray (published in the docking_station frame).
+        self.featurePosesPublisher = self.create_publisher(
+                PoseArray, 'lolo/perception/optical_poses', 1)
 
-        # sed in perception.py to update the estimated pose (estDSPose) for better prediction of the ROI
+        # Sed in perception.py to update the estimated pose (estDSPose) for better prediction of the ROI.
         self._cameraPoseMsg = None
-        self.cameraPoseSub = rospy.Subscriber("lolo/camera/pose", PoseWithCovarianceStamped, self._cameraPoseSub)
+        self.cameraPoseSub = self.create_subscription(
+                PoseWithCovarianceStamped, "lolo/camera/pose", self._cameraPoseSub, 1)
 
     def _getCameraCallback(self, msg):
         """
@@ -66,19 +88,14 @@ class PerceptionNode:
         https://answers.ros.org/question/119506/what-does-projection-matrix-provided-by-the-calibration-represent/
         https://github.com/dimatura/ros_vimdoc/blob/master/doc/ros-camera-info.txt
         """
-        from lolo_perception.camera_model import Camera
-        # Using only P (D=0), we should subscribe to the rectified image topic
+        # Using only P (D=0), we should subscribe to the rectified image topic.
         camera = Camera(cameraMatrix=np.array(msg.P, dtype=np.float32).reshape((3,4))[:, :3],
                         distCoeffs=np.zeros((1,4), dtype=np.float32),
                         resolution=(msg.height, msg.width))
-        # Using K and D, we should subscribe to the raw image topic
-        #_camera = Camera(cameraMatrix=np.array(msg.K, dtype=np.float32).reshape((3,3)),
-        #                distCoeffs=np.array(msg.D, dtype=np.float32),
-        #                resolution=(msg.height, msg.width))
         self.camera = camera
 
-        # We only want one message
-        self.cameraInfoSub.unregister()
+        # We only want one message.
+        self.cameraInfoSub.destroy()
 
     def _imgCallback(self, msg):
         self.imageMsg = msg
@@ -97,7 +114,6 @@ class PerceptionNode:
         cameraPoseVector = None
         if self._cameraPoseMsg:
             t, r = poseToVector(self._cameraPoseMsg)
-            #t *= 0 # we disregard translation, ds has to be estimated
             cameraPoseVector = np.array(list(t) + list(r))
             self._cameraPoseMsg = None
 
@@ -137,10 +153,10 @@ class PerceptionNode:
                    thickness=2,
                    lineType=cv.LINE_AA)
 
-        timeStamp = rospy.Time.now()
-        # publish pose if pose has been aquired
+        timeStamp = self.get_clock().now()
+        # Publish pose if pose has been aquired.
         if publishPose and poseAquired and dsPose.detectionCount >= 10: # TODO: set to 10
-            # publish transform
+            # Publish transform.
             dsTransform = vectorToTransform("lolo/camera_link",
                                             "service_boat/estimated/fiducials_link",
                                             dsPose.translationVector,
@@ -148,11 +164,11 @@ class PerceptionNode:
                                             timeStamp=timeStamp)
             self.transformPublisher.publish(tf.msg.tfMessage([dsTransform]))
 
-            # Publish placement of the light sources as a PoseArray (published in the docking_station frame)
+            # Publish placement of the light sources as a PoseArray (published in the docking_station frame).
             pArray = featurePointsToMsg("service_boat/estimated/fiducials_link", self.perception.featureModel.features, timeStamp=timeStamp)
             self.featurePosesPublisher.publish(pArray)
 
-            # publish estimated pose
+            # Publish estimated pose.
             self.posePublisher.publish(
                 vectorToPose("lolo/camera_link",
                 dsPose.translationVector,
@@ -160,7 +176,7 @@ class PerceptionNode:
                 dsPose.covariance,
                 timeStamp=timeStamp)
                 )
-            # publish mahalanobis distance
+            # Publish mahalanobis distance.
             if not dsPose.mahaDist and estDSPose:
                 dsPose.calcMahalanobisDist(estDSPose)
                 self.mahalanobisDistPub.publish(Float32(dsPose.mahaDist))
@@ -178,27 +194,25 @@ class PerceptionNode:
         if publishImages:
             self.imgProcDrawPublisher.publish(self.bridge.cv2_to_imgmsg(processedImg))
             self.imgProcPublisher.publish(self.bridge.cv2_to_imgmsg(self.perception.featureExtractor.img))
-            #if dsPose:
             self.imgPosePublisher.publish(self.bridge.cv2_to_imgmsg(poseImg))
 
         if dsPose:
-            # if the light source candidates have been associated, we pusblish the associated candidates
+            # If the light source candidates have been associated, we pusblish the associated candidates.
             self.associatedImagePointsPublisher.publish(lightSourcesToMsg(dsPose.associatedLightSources, timeStamp=timeStamp))
         else:
-            # otherwise we publish all candidates
+            # Otherwise we publish all candidates.
             self.associatedImagePointsPublisher.publish(lightSourcesToMsg(candidates, timeStamp=timeStamp))
 
         return dsPose, poseAquired, candidates
 
     def run(self, poseFeedback=True, publishPose=True, publishCamPose=False, publishImages=True):
-        rate = rospy.Rate(self.hz)
         # currently estimated docking station pose
         # send the pose as an argument in update
         # for the feature extraction to consider only a region of interest
         # near the estimated pose
         estDSPose = None
 
-        while not rospy.is_shutdown():
+        while rclpy.ok():
 
             if self.imageMsg:
                 try:
@@ -244,31 +258,36 @@ class PerceptionNode:
                 if show:
                     cv.waitKey(1)
 
-            rate.sleep()
+            self.rate.sleep()
 
 
 if __name__ == '__main__':
-    from lolo_perception.feature_model import FeatureModel
-    import os
-    import rospkg
-    import argparse
-    rospy.init_node('perception_node')
+    rclpy.init(args=None)  # TODO(aldoteran) pass in args correctly.
 
-    #parser = argparse.ArgumentParser(description='Perception node')
-    #parser.add_argument('-feature_model_yaml', type=str, default="big_prototype_5.yaml",
-    #                    help='')
+    # TODO(aldoteran): figure out how to read in these parameters!
+    # TODO(aldoteran) featureModelYaml = rospy.get_param("~feature_model_yaml")
+    hz = 30  # TODO(aldoteran): rospy.get_param("~hz")
+    cvShow = False  # TODO(aldoteran) rospy.get_param("~cv_show")
+    publishCamPose = True  # TODO(aldoteran) rospy.get_param("~publish_cam_pose")
+    hatsMode = "valley"  # TODO(aldoteran) rospy.get_param("~hats_mode")
+    poseFeedBack = True  # TODO(aldoteran) rospy.get_param("~pose_feedback")
 
-    #args = parser.parse_args()
-
-    featureModelYaml = rospy.get_param("~feature_model_yaml")
-    hz = rospy.get_param("~hz")
-    cvShow = rospy.get_param("~cv_show")
-    publishCamPose = rospy.get_param("~publish_cam_pose")
-    hatsMode = rospy.get_param("~hats_mode")
-    poseFeedBack = rospy.get_param("~pose_feedback")
-    #featureModelYaml = args.feature_model_yaml
-    featureModelYamlPath = os.path.join(rospkg.RosPack().get_path("lolo_perception"), "feature_models/{}".format(featureModelYaml))
-    featureModel = FeatureModel.fromYaml(featureModelYamlPath)
+    # TODO(aldoteran) yolo with the yaml... gotta figure it out.
+    # featureModelYamlPath = os.path.join(
+    #         rospkg.RosPack().get_path("lolo_perception"),
+    #         "feature_models/{}".format(featureModelYaml))
+    # featureModel = FeatureModel.fromYaml(featureModelYamlPath)
+    featureModel = FeatureModel(
+            "asko_240611_station",
+            np.array([[0., 0., -0.20], # Center.
+                      [-0.21, -0.22, 0.], # Top left.
+                      [0.21, -0.22,  0.], # Top right.
+                      [0.21, 0.16, 0.], # Botttom right.
+                      [-0.21, 0.16, 0.]]), # Bottom left.
+            placementUncertainty=0.01,
+            detectionTolerance=0.1)
 
     perception = PerceptionNode(featureModel, hz, cvShow=cvShow, hatsMode=hatsMode)
+
+    # TODO(aldoteran) this should be migrated to `rclpy.spin(perception)`.
     perception.run(poseFeedback=poseFeedBack, publishPose=True, publishCamPose=publishCamPose, publishImages=True)

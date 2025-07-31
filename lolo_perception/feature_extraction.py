@@ -5,10 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 from scipy import signal
-import rospy
 from sensor_msgs.msg import Image
 import itertools
-from lolo_perception.perception_utils import plotHistogram, regionOfInterest
+from perception_utils import plotHistogram, regionOfInterest
 
 class PercentageThreshold:
     def __init__(self, p, thresholdType=cv.THRESH_BINARY):
@@ -466,7 +465,8 @@ def refineCentroidGradient(gray, contours, ksize=3):
 
     return centroids
 
-def RCF((x,y), r, gray):
+def RCF(xy, r, gray):
+    x,y = xy
     I = float(gray[y, x])
 
     mask = np.zeros(gray.shape, dtype=np.uint8)
@@ -481,7 +481,7 @@ def RCF((x,y), r, gray):
 
     return rcf
 
-def RCFS((i, j), rStart, gray, rInc=1, drawImg=None):
+def RCFS(ij, rStart, gray, rInc=1, drawImg=None):
     """
     Computes the sum of neighbouring pixels at radius R
     Based on section 4.2 in https://www.tdx.cat/bitstream/handle/10803/275990/tmmm1de1.pdf?sequence=5
@@ -493,6 +493,7 @@ def RCFS((i, j), rStart, gray, rInc=1, drawImg=None):
     rcfs - list of rcfs from first radius to last
     """
     assert rStart >= 1, "Start radius must be larger than 1"
+    i,j = ij
 
     def continueCondition(rcfs, maxDiff, n):
         # when the last n samples has had a slope lesser than maxDiff

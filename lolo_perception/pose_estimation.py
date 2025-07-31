@@ -1,4 +1,3 @@
-
 import cv2 as cv
 import numpy as np
 import time
@@ -7,15 +6,15 @@ from mpl_toolkits import mplot3d
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 import scipy
-from lolo_perception.perception_utils import projectPoints, reprojectionError
-from lolo_perception.feature_extraction import featureAssociation
+from perception_utils import projectPoints, reprojectionError
+from feature_extraction import featureAssociation
 
 
-from lolo_perception.reprojection_utils import calcPoseReprojectionRMSEThreshold, calcPoseReprojectionThresholds
-from lolo_perception.pose_estimation_utils import lmSolve, interactionMatrix
+from reprojection_utils import calcPoseReprojectionRMSEThreshold, calcPoseReprojectionThresholds
+from pose_estimation_utils import lmSolve, interactionMatrix
 
 from numpy.linalg import lapack_lite
-#lapack_routine = lapack_lite.dgesv
+
 
 def calcImageCovariance(translationVector, rotationVector, camera, featureModel, confidence):
     sigma3D = featureModel.uncertainty/np.sqrt(confidence)

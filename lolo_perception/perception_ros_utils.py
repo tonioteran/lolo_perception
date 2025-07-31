@@ -1,10 +1,9 @@
-
 import numpy as np
-import rospy
 from scipy.spatial.transform import Rotation as R
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, PoseArray, Pose, Quaternion, TransformStamped
 from sensor_msgs.msg import CameraInfo
-from tf.transformations import quaternion_from_matrix
+# TODO(aldoteran) Does this exist for ROS2.
+# from tf.transformations import quaternion_from_matrix
 import yaml
 import os
 import rospkg
@@ -17,7 +16,8 @@ def vectorToPose(frameID, translationVector, rotationVector, covariance, timeSta
 
     p = PoseWithCovarianceStamped()
     p.header.frame_id = frameID
-    p.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    p.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     (p.pose.pose.position.x,
      p.pose.pose.position.y,
      p.pose.pose.position.z) = (translationVector[0],
@@ -36,7 +36,8 @@ def vectorToPoseStamped(frameID, translationVector, rotationVector, timeStamp=No
 
     p = PoseStamped()
     p.header.frame_id = frameID
-    p.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    p.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     (p.pose.position.x,
      p.pose.position.y,
      p.pose.position.z) = (translationVector[0],
@@ -48,7 +49,8 @@ def vectorToPoseStamped(frameID, translationVector, rotationVector, timeStamp=No
 
 def vectorToTransform(frameID, childFrameID, translationVector, rotationVector, timeStamp=None):
     t = TransformStamped()
-    t.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    t.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     t.header.frame_id = frameID
     t.child_frame_id = childFrameID
     t.transform.translation.x = translationVector[0]
@@ -64,7 +66,8 @@ def vectorToTransform(frameID, childFrameID, translationVector, rotationVector, 
 
 def vectorQuatToTransform(frameID, childFrameID, translationVector, quaternion, timeStamp=None):
     t = TransformStamped()
-    t.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    t.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     t.header.frame_id = frameID
     t.child_frame_id = childFrameID
     t.transform.translation.x = translationVector[0]
@@ -93,7 +96,8 @@ def poseToVector(pose):
 
 def lightSourcesToMsg(lightSources, timeStamp=None):
     poseArray = PoseArray()
-    poseArray.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    poseArray.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     poseArray.header.frame_id = "lolo_camera/image_plane"
     for ls in lightSources:
         pose = Pose()
@@ -108,7 +112,8 @@ def featurePointsToMsg(frameId, featurePoints, timeStamp=None):
     pArray = PoseArray()
     #pArrayNoised = PoseArray()
     pArray.header.frame_id = frameId
-    pArray.header.stamp = timeStamp if timeStamp else rospy.Time.now()
+    # TODO(aldoteran) what to do with time here (rospy.Time.now() not valid).
+    pArray.header.stamp = timeStamp if timeStamp else -1  # rospy.Time.now()
     for p in featurePoints:
         pose = Pose()
         pose.position.x = p[0]
